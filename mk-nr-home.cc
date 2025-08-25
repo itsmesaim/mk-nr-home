@@ -98,6 +98,10 @@ int main (int argc, char *argv[])
   Ptr<NrHelper> nr = CreateObject<NrHelper> ();
   nr->SetEpcHelper (epcHelper);
 
+  // Set numerology BEFORE creating bandwidth parts
+  nr->SetGnbPhyAttribute ("Numerology", UintegerValue (numerology));
+  nr->SetUePhyAttribute ("Numerology", UintegerValue (numerology));
+
   std::vector<CcBwpCreator::SimpleOperationBandConf> bands;
   bands.emplace_back (centralFreq, bandwidth, numCc);
 
@@ -108,6 +112,8 @@ int main (int argc, char *argv[])
   NetDeviceContainer gnbDevs = nr->InstallGnbDevice (gNbNodes, allBwps);
   NetDeviceContainer ueDevs  = nr->InstallUeDevice  (ueNodes,  allBwps);
 
+  // Remove the old numerology setting code since we set it before device installation
+  /*
   // Set numerology μ on BWP 0 for all devices (your old 30 kHz intent)
   for (uint32_t i = 0; i < gnbDevs.GetN (); ++i)
   {
@@ -119,6 +125,7 @@ int main (int argc, char *argv[])
     Ptr<NrUePhy> uePhy0 = NrHelper::GetUePhy (ueDevs.Get (i), 0);
     uePhy0->SetAttribute ("Numerology", UintegerValue (numerology));
   }
+  */
 
   // ---- Attach UEs and set bearer ----
   nr->AttachToClosestGnb (ueDevs, gnbDevs);  // initial association
