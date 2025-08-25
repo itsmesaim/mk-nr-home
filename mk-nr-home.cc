@@ -5,14 +5,14 @@
 #include "ns3/point-to-point-module.h"
 #include "ns3/applications-module.h"
 
-#include "ns3/nr-module.h"                         // NrHelper, CcBwpCreator, etc.
-#include "ns3/nr-point-to-point-epc-helper.h"      // EPC for NR
+#include "ns3/nr-module.h"
+#include "ns3/nr-point-to-point-epc-helper.h"
 
 using namespace ns3;
 
 int main (int argc, char *argv[])
 {
-  // ---- Simulation params (override via --gNbNum= --ueNum= --simTime= etc.) ----
+  // ---- Simulation params ----
   uint16_t gNbNum = 1;
   uint16_t ueNum = 2;
   double centralFreq = 28e9;       // 28 GHz
@@ -73,6 +73,27 @@ int main (int argc, char *argv[])
   Ptr<Ipv4StaticRouting> rhRoute = rtHelper.GetStaticRouting (remoteHost->GetObject<Ipv4> ());
   rhRoute->AddNetworkRouteTo (Ipv4Address ("7.0.0.0"), Ipv4Mask ("255.0.0.0"), pgwAddr, 1);
 
+  // =========================
+  // IMPORTANT: Set mobility BEFORE installing NR devices
+  // =========================
+
+  // gNB at origin; UEs on a line at y=0, spaced by 10 m
+  MobilityHelper mob;
+
+  Ptr<ListPositionAllocator> gnbPos = CreateObject<ListPositionAllocator> ();
+  gnbPos->Add (Vector (0.0, 0.0, 10.0));              // 10 m high
+  mob.SetPositionAllocator (gnbPos);
+  mob.SetMobilityModel ("ns3::ConstantPositionMobilityModel");
+  mob.Install (gNbNodes);
+
+  Ptr<ListPositionAllocator> uePos = CreateObject<ListPositionAllocator> ();
+  for (uint32_t i = 0; i < ueNum; ++i)
+  {
+    uePos->Add (Vector (5.0 + 10.0 * i, 0.0, 1.5));
+  }
+  mob.SetPositionAllocator (uePos);
+  mob.Install (ueNodes);
+
   // ---- NR Helper and spectrum/BWPs (new v4.x API) ----
   Ptr<NrHelper> nr = CreateObject<NrHelper> ();
   nr->SetEpcHelper (epcHelper);
@@ -83,7 +104,7 @@ int main (int argc, char *argv[])
   // Create BWPs & channels (no InitializeOperationBand in v4.x)
   auto [totalBw, allBwps] = nr->CreateBandwidthParts (bands);
 
-  // ---- gNB / UE devices ----
+  // ---- gNB / UE devices (mobility is already set) ----
   NetDeviceContainer gnbDevs = nr->InstallGnbDevice (gNbNodes, allBwps);
   NetDeviceContainer ueDevs  = nr->InstallUeDevice  (ueNodes,  allBwps);
 
@@ -98,23 +119,6 @@ int main (int argc, char *argv[])
     Ptr<NrUePhy> uePhy0 = NrHelper::GetUePhy (ueDevs.Get (i), 0);
     uePhy0->SetAttribute ("Numerology", UintegerValue (numerology));
   }
-
-  // ---- Simple placement ----
-  // gNB at origin; UEs on a line at y=0, spaced by 10 m
-  MobilityHelper mob;
-  Ptr<ListPositionAllocator> gnbPos = CreateObject<ListPositionAllocator> ();
-  gnbPos->Add (Vector (0.0, 0.0, 10.0));              // 10 m high
-  mob.SetPositionAllocator (gnbPos);
-  mob.SetMobilityModel ("ns3::ConstantPositionMobilityModel");
-  mob.Install (gNbNodes);
-
-  Ptr<ListPositionAllocator> uePos = CreateObject<ListPositionAllocator> ();
-  for (uint32_t i = 0; i < ueNum; ++i)
-  {
-    uePos->Add (Vector (5.0 + 10.0 * i, 0.0, 1.5));
-  }
-  mob.SetPositionAllocator (uePos);
-  mob.Install (ueNodes);
 
   // ---- Attach UEs and set bearer ----
   nr->AttachToClosestGnb (ueDevs, gnbDevs);  // initial association
@@ -143,6 +147,5 @@ int main (int argc, char *argv[])
   Simulator::Stop (Seconds (simTimeSec));
   Simulator::Run ();
   Simulator::Destroy ();
-
   return 0;
 }
