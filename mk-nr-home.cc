@@ -92,12 +92,17 @@ int main (int argc, char *argv[])
 
   // Create operation bands using the new API
   CcBwpCreator ccBwpCreator;
-  CcBwpCreator::SimpleOperationBandConf bandConf (centralFreq, bandwidth, numCc, numerology);
+  CcBwpCreator::SimpleOperationBandConf bandConf (centralFreq, bandwidth, numCc);
+  bandConf.m_numerology = numerology;  // Set numerology separately
+  
   OperationBandInfo band = ccBwpCreator.CreateOperationBandContiguousCc (bandConf);
 
+  // Get all BWPs from the band
+  BandwidthPartInfoPtrVector allBwps = CcBwpCreator::GetAllBwps ({band});
+
   // Install NR devices
-  NetDeviceContainer gnbDevs = nr->InstallGnbDevice (gNbNodes, band);
-  NetDeviceContainer ueDevs  = nr->InstallUeDevice  (ueNodes,  band);
+  NetDeviceContainer gnbDevs = nr->InstallGnbDevice (gNbNodes, allBwps);
+  NetDeviceContainer ueDevs  = nr->InstallUeDevice  (ueNodes,  allBwps);
 
   // Attach & bearer
   nr->AttachToClosestGnb (ueDevs, gnbDevs);
