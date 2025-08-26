@@ -18,8 +18,7 @@ int main (int argc, char *argv[])
   double   centralFreq = 28e9;     // 28 GHz (FR2)
   double   bandwidth  = 100e6;     // 100 MHz
   uint8_t  numCc      = 1;         // one CC → one BWP
-  // In v4.1, choose SCS via enum below (implies numerology)
-  auto     scs        = SubcarrierSpacing::kHz120; // or kHz30/kHz60
+  uint8_t  numerology = 3;         // Use numerology instead of SCS enum (3 = 120 kHz)
   double   simTimeSec = 3.0;
   bool     logging    = false;
 
@@ -87,21 +86,18 @@ int main (int argc, char *argv[])
   mob.SetPositionAllocator (uePos);
   mob.Install (ueNodes);
 
-  // ---- NR Helper and BWPs (v4.1 API) ----
+  // ---- NR Helper and BWPs (updated API) ----
   Ptr<NrHelper> nr = CreateObject<NrHelper> ();
   nr->SetEpcHelper (epcHelper);
 
-  // Build operation bands (vector)
-  CcBwpCreator cc;
-  CcBwpCreator::SimpleOperationBandConf bandConf (centralFreq, bandwidth, numCc, scs);
-  std::vector<OperationBandInfo> bands = cc.CreateOperationBands ({ bandConf });
+  // Create operation bands using the new API
+  CcBwpCreator ccBwpCreator;
+  CcBwpCreator::SimpleOperationBandConf bandConf (centralFreq, bandwidth, numCc, numerology);
+  OperationBandInfo band = ccBwpCreator.CreateOperationBandContiguousCc (bandConf);
 
-  // Get all BWPs from those bands
-  BandwidthPartInfoPtrVector allBwps = CcBwpCreator::GetAllBwps (bands);
-
-  // Install NR devices with those BWPs
-  NetDeviceContainer gnbDevs = nr->InstallGnbDevice (gNbNodes, allBwps);
-  NetDeviceContainer ueDevs  = nr->InstallUeDevice  (ueNodes,  allBwps);
+  // Install NR devices
+  NetDeviceContainer gnbDevs = nr->InstallGnbDevice (gNbNodes, band);
+  NetDeviceContainer ueDevs  = nr->InstallUeDevice  (ueNodes,  band);
 
   // Attach & bearer
   nr->AttachToClosestGnb (ueDevs, gnbDevs);
