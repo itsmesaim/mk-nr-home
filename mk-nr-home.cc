@@ -15,11 +15,12 @@ int main (int argc, char *argv[])
   // ---- Simulation params ----
   uint16_t gNbNum = 1;
   uint16_t ueNum = 2;
-  double centralFreq = 28e9;       // 28 GHz
+  double centralFreq = 28e9;       // 28 GHz (FR2)
   double bandwidth  = 100e6;       // 100 MHz
   uint8_t numCc     = 1;           // one CC → one BWP
-  uint32_t numerology = 1;         // μ=1 ≈ 30 kHz SCS
-  double simTimeSec = 3.0;         // total sim time
+  // Choose SCS via the BWP config (this implies numerology)
+  auto scs = BandwidthPartInfo::SubcarrierSpacing::kHz120; // FR2 typical
+  double simTimeSec = 3.0;
   bool logging = false;
 
   CommandLine cmd;
@@ -28,7 +29,6 @@ int main (int argc, char *argv[])
   cmd.AddValue ("centralFreq", "Central frequency (Hz)", centralFreq);
   cmd.AddValue ("bandwidth", "Channel bandwidth (Hz)", bandwidth);
   cmd.AddValue ("numCc", "Number of component carriers per band", numCc);
-  cmd.AddValue ("numerology", "NR numerology (0..4)", numerology);
   cmd.AddValue ("simTime", "Simulation time (s)", simTimeSec);
   cmd.AddValue ("logging", "Enable some logs", logging);
   cmd.Parse (argc, argv);
@@ -74,14 +74,12 @@ int main (int argc, char *argv[])
   rhRoute->AddNetworkRouteTo (Ipv4Address ("7.0.0.0"), Ipv4Mask ("255.0.0.0"), pgwAddr, 1);
 
   // =========================
-  // IMPORTANT: Set mobility BEFORE installing NR devices
+  // Mobility BEFORE installing NR devices
   // =========================
-
-  // gNB at origin; UEs on a line at y=0, spaced by 10 m
   MobilityHelper mob;
 
   Ptr<ListPositionAllocator> gnbPos = CreateObject<ListPositionAllocator> ();
-  gnbPos->Add (Vector (0.0, 0.0, 10.0));              // 10 m high
+  gnbPos->Add (Vector (0.0, 0.0, 10.0));              // gNB 10 m high
   mob.SetPositionAllocator (gnbPos);
   mob.SetMobilityModel ("ns3::ConstantPositionMobilityModel");
   mob.Install (gNbNodes);
@@ -94,43 +92,28 @@ int main (int argc, char *argv[])
   mob.SetPositionAllocator (uePos);
   mob.Install (ueNodes);
 
-  // ---- NR Helper and spectrum/BWPs (new v4.x API) ----
+  // ---- NR Helper and BWPs (v4.x API) ----
   Ptr<NrHelper> nr = CreateObject<NrHelper> ();
   nr->SetEpcHelper (epcHelper);
 
-  // Set numerology BEFORE creating bandwidth parts
-  nr->SetGnbPhyAttribute ("Numerology", UintegerValue (numerology));
-  nr->SetUePhyAttribute ("Numerology", UintegerValue (numerology));
+  // Create one operation band with chosen SCS; this defines numerology implicitly
+  CcBwpCreator cc;
+  CcBwpCreator::SimpleOperationBandConf bandConf(centralFreq, bandwidth, numCc, scs);
+  OperationBandInfo band = cc.CreateOperationBand(bandConf);
+  BandwidthPartInfoPtrVector allBwps = CcBwpCreator::GetAllBwps(band);
+  nr->InitializeOperationBand(&band);
 
-  std::vector<CcBwpCreator::SimpleOperationBandConf> bands;
-  bands.emplace_back (centralFreq, bandwidth, numCc);
-
-  // Create BWPs & channels (no InitializeOperationBand in v4.x)
-  auto [totalBw, allBwps] = nr->CreateBandwidthParts (bands);
-
-  // ---- gNB / UE devices (mobility is already set) ----
+  // Install devices
   NetDeviceContainer gnbDevs = nr->InstallGnbDevice (gNbNodes, allBwps);
   NetDeviceContainer ueDevs  = nr->InstallUeDevice  (ueNodes,  allBwps);
 
-  // Remove the old numerology setting code since we set it before device installation
-  /*
-  // Set numerology μ on BWP 0 for all devices (your old 30 kHz intent)
-  for (uint32_t i = 0; i < gnbDevs.GetN (); ++i)
-  {
-    Ptr<NrGnbPhy> gnbPhy0 = NrHelper::GetGnbPhy (gnbDevs.Get (i), 0);
-    gnbPhy0->SetAttribute ("Numerology", UintegerValue (numerology));
-  }
-  for (uint32_t i = 0; i < ueDevs.GetN (); ++i)
-  {
-    Ptr<NrUePhy> uePhy0 = NrHelper::GetUePhy (ueDevs.Get (i), 0);
-    uePhy0->SetAttribute ("Numerology", UintegerValue (numerology));
-  }
-  */
-
-  // ---- Attach UEs and set bearer ----
-  nr->AttachToClosestGnb (ueDevs, gnbDevs);  // initial association
+  // Attach UEs and activate bearer
+  nr->AttachToClosestGnb (ueDevs, gnbDevs);
   NrEpsBearer bearer (NrEpsBearer::NGBR_LOW_LAT_EMBB);
   nr->ActivateDataRadioBearer (ueDevs, bearer);
+
+  // EPC assigns UE IPs
+  epcHelper->AssignUeIpv4Address (ueDevs);
 
   // ---- UL traffic: UEs -> RemoteHost (UDP) ----
   uint16_t ulPort = 4444;
@@ -150,7 +133,6 @@ int main (int argc, char *argv[])
     c.Stop  (Seconds (simTimeSec));
   }
 
-  // ---- Run ----
   Simulator::Stop (Seconds (simTimeSec));
   Simulator::Run ();
   Simulator::Destroy ();
