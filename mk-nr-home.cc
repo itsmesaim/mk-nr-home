@@ -14,14 +14,14 @@ int main (int argc, char *argv[])
 {
   // ---- Simulation params ----
   uint16_t gNbNum = 1;
-  uint16_t ueNum = 2;
-  double centralFreq = 28e9;       // 28 GHz (FR2)
-  double bandwidth  = 100e6;       // 100 MHz
-  uint8_t numCc     = 1;           // one CC → one BWP
-  // Choose SCS via the BWP config (this implies numerology)
-  auto scs = BandwidthPartInfo::SubcarrierSpacing::kHz120; // FR2 typical
-  double simTimeSec = 3.0;
-  bool logging = false;
+  uint16_t ueNum  = 2;
+  double   centralFreq = 28e9;     // 28 GHz (FR2)
+  double   bandwidth  = 100e6;     // 100 MHz
+  uint8_t  numCc      = 1;         // one CC → one BWP
+  // In v4.1, choose SCS via enum below (implies numerology)
+  auto     scs        = SubcarrierSpacing::kHz120; // or kHz30/kHz60
+  double   simTimeSec = 3.0;
+  bool     logging    = false;
 
   CommandLine cmd;
   cmd.AddValue ("gNbNum", "Number of gNBs", gNbNum);
@@ -33,17 +33,15 @@ int main (int argc, char *argv[])
   cmd.AddValue ("logging", "Enable some logs", logging);
   cmd.Parse (argc, argv);
 
-  if (logging)
-  {
+  if (logging) {
     LogComponentEnable ("UdpClient", LOG_LEVEL_INFO);
     LogComponentEnable ("UdpServer", LOG_LEVEL_INFO);
   }
 
-  // ---- Create nodes ----
+  // ---- Nodes ----
   NodeContainer gNbNodes;  gNbNodes.Create (gNbNum);
   NodeContainer ueNodes;   ueNodes.Create (ueNum);
 
-  // Remote host (the "Internet" beyond the PGW)
   NodeContainer remoteHostContainer; 
   remoteHostContainer.Create (1);
   Ptr<Node> remoteHost = remoteHostContainer.Get (0);
@@ -52,62 +50,60 @@ int main (int argc, char *argv[])
   Ptr<NrPointToPointEpcHelper> epcHelper = CreateObject<NrPointToPointEpcHelper> ();
   Ptr<Node> pgw = epcHelper->GetPgwNode ();
 
-  // Internet between PGW <-> RemoteHost
+  // PGW <-> RemoteHost wired link
   PointToPointHelper p2p;
   p2p.SetDeviceAttribute ("DataRate", StringValue ("100Gbps"));
-  p2p.SetChannelAttribute ("Delay", StringValue ("1ms"));
+  p2p.SetChannelAttribute ("Delay",    StringValue ("1ms"));
   NetDeviceContainer internetDevs = p2p.Install (pgw, remoteHost);
 
   InternetStackHelper internet;
   internet.Install (remoteHostContainer);         // IP stack on remote host
-  internet.Install (ueNodes);                     // IP stack on UEs (EPC assigns UE IPs)
+  internet.Install (ueNodes);                     // UEs get IPs via EPC
 
   Ipv4AddressHelper ipv4h;
-  ipv4h.SetBase ("1.0.0.0", "255.0.0.0");        // simple /8 for PGW<->RemoteHost link
+  ipv4h.SetBase ("1.0.0.0", "255.0.0.0");
   Ipv4InterfaceContainer ifaces = ipv4h.Assign (internetDevs);
-  Ipv4Address pgwAddr       = ifaces.GetAddress (0);  // on PGW
-  Ipv4Address remoteHostIp  = ifaces.GetAddress (1);  // on RemoteHost
+  Ipv4Address pgwAddr       = ifaces.GetAddress (0);
+  Ipv4Address remoteHostIp  = ifaces.GetAddress (1);
 
-  // Route on RemoteHost to UE subnet (EPC gives UEs 7.0.0.0/8 by default)
+  // RemoteHost route to UE net (7.0.0.0/8 default from EPC)
   Ipv4StaticRoutingHelper rtHelper;
   Ptr<Ipv4StaticRouting> rhRoute = rtHelper.GetStaticRouting (remoteHost->GetObject<Ipv4> ());
   rhRoute->AddNetworkRouteTo (Ipv4Address ("7.0.0.0"), Ipv4Mask ("255.0.0.0"), pgwAddr, 1);
 
-  // =========================
-  // Mobility BEFORE installing NR devices
-  // =========================
+  // ---- Mobility BEFORE device install ----
   MobilityHelper mob;
 
   Ptr<ListPositionAllocator> gnbPos = CreateObject<ListPositionAllocator> ();
-  gnbPos->Add (Vector (0.0, 0.0, 10.0));              // gNB 10 m high
+  gnbPos->Add (Vector (0.0, 0.0, 10.0));   // gNB at 10 m height
   mob.SetPositionAllocator (gnbPos);
   mob.SetMobilityModel ("ns3::ConstantPositionMobilityModel");
   mob.Install (gNbNodes);
 
   Ptr<ListPositionAllocator> uePos = CreateObject<ListPositionAllocator> ();
-  for (uint32_t i = 0; i < ueNum; ++i)
-  {
+  for (uint32_t i = 0; i < ueNum; ++i) {
     uePos->Add (Vector (5.0 + 10.0 * i, 0.0, 1.5));
   }
   mob.SetPositionAllocator (uePos);
   mob.Install (ueNodes);
 
-  // ---- NR Helper and BWPs (v4.x API) ----
+  // ---- NR Helper and BWPs (v4.1 API) ----
   Ptr<NrHelper> nr = CreateObject<NrHelper> ();
   nr->SetEpcHelper (epcHelper);
 
-  // Create one operation band with chosen SCS; this defines numerology implicitly
+  // Build operation bands (vector)
   CcBwpCreator cc;
-  CcBwpCreator::SimpleOperationBandConf bandConf(centralFreq, bandwidth, numCc, scs);
-  OperationBandInfo band = cc.CreateOperationBand(bandConf);
-  BandwidthPartInfoPtrVector allBwps = CcBwpCreator::GetAllBwps(band);
-  nr->InitializeOperationBand(&band);
+  CcBwpCreator::SimpleOperationBandConf bandConf (centralFreq, bandwidth, numCc, scs);
+  std::vector<OperationBandInfo> bands = cc.CreateOperationBands ({ bandConf });
 
-  // Install devices
+  // Get all BWPs from those bands
+  BandwidthPartInfoPtrVector allBwps = CcBwpCreator::GetAllBwps (bands);
+
+  // Install NR devices with those BWPs
   NetDeviceContainer gnbDevs = nr->InstallGnbDevice (gNbNodes, allBwps);
   NetDeviceContainer ueDevs  = nr->InstallUeDevice  (ueNodes,  allBwps);
 
-  // Attach UEs and activate bearer
+  // Attach & bearer
   nr->AttachToClosestGnb (ueDevs, gnbDevs);
   NrEpsBearer bearer (NrEpsBearer::NGBR_LOW_LAT_EMBB);
   nr->ActivateDataRadioBearer (ueDevs, bearer);
@@ -122,8 +118,7 @@ int main (int argc, char *argv[])
   serverApps.Start (Seconds (0.2));
   serverApps.Stop  (Seconds (simTimeSec));
 
-  for (uint32_t i = 0; i < ueDevs.GetN (); ++i)
-  {
+  for (uint32_t i = 0; i < ueDevs.GetN (); ++i) {
     UdpClientHelper ulClient (remoteHostIp, ulPort);
     ulClient.SetAttribute ("MaxPackets", UintegerValue (0));      // unlimited
     ulClient.SetAttribute ("Interval",   TimeValue (MilliSeconds (2)));
